@@ -1,82 +1,94 @@
-const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
+const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
+require('dotenv').config();
 
-const dbPath = path.join(__dirname, 'anicosmic.db');
-const db = new sqlite3.Database(dbPath);
+// Настройки подключения к БД
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
 
-// Initialize database
-const init = () => {
-  return new Promise((resolve, reject) => {
-    // Create tables
-    db.serialize(() => {
-      // Users table
-      db.run(`CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        email TEXT UNIQUE NOT NULL,
+// Инициализация базы данных
+const init = async () => {
+  try {
+    // Создание таблиц
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(100) UNIQUE NOT NULL,
+        email VARCHAR(100) UNIQUE NOT NULL,
         password TEXT NOT NULL,
-        role TEXT DEFAULT 'user',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )`);
+        role VARCHAR(20) DEFAULT 'user',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-      // Anime table
-      db.run(`CREATE TABLE IF NOT EXISTS anime (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS anime (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
         rating REAL DEFAULT 0,
         year INTEGER,
         episodes INTEGER DEFAULT 1,
-        genre TEXT,
-        type TEXT CHECK(type IN ('series', 'movies', 'ova', 'ona')),
+        genre VARCHAR(100),
+        type VARCHAR(20) CHECK (type IN ('series', 'movies', 'ova', 'ona')),
         description TEXT,
         image_url TEXT,
-        added_date DATETIME DEFAULT CURRENT_TIMESTAMP
-      )`);
+        added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-      // Episodes table
-      db.run(`CREATE TABLE IF NOT EXISTS episodes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        anime_id INTEGER,
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS episodes (
+        id SERIAL PRIMARY KEY,
+        anime_id INTEGER REFERENCES anime(id) ON DELETE CASCADE,
         episode_number INTEGER,
-        title TEXT,
+        title VARCHAR(255),
         video_url TEXT,
-        added_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (anime_id) REFERENCES anime (id) ON DELETE CASCADE
-      )`);
+        added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-      // Team members table
-      db.run(`CREATE TABLE IF NOT EXISTS team_members (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        role TEXT,
-        department TEXT,
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS team_members (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        role VARCHAR(100),
+        department VARCHAR(100),
         bio TEXT,
         contacts TEXT
-      )`);
+      )
+    `);
 
-      // Insert default admin user
-      const defaultPassword = bcrypt.hashSync('admin123', 10);
-      db.run(`INSERT OR IGNORE INTO users (username, email, password, role) VALUES (?, ?, ?, ?)`, 
-        ['admin', 'admin@anicosmic.com', defaultPassword, 'admin'], function(err) {
-        if (err) {
-          console.error('Error creating default admin:', err);
-          reject(err);
-        } else {
-          console.log('Default admin user created');
-          resolve();
-        }
-      });
+    // Проверяем, есть ли уже администратор
+    const adminCheck = await pool.query('SELECT id FROM users WHERE username = $1', ['admin']);
+    if (adminCheck.rows.length === 0) {
+      const hashedPassword = await bcrypt.hash('admin123', 10);
+      await pool.query(
+        'INSERT INTO users (username, email, password, role) VALUES ($1, $2, $3, $4)',
+        ['admin', 'admin@anicosmic.com', hashedPassword, 'admin']
+      );
+      console.log('Default admin user created');
+    }
 
-      // Insert sample team members
-      db.run(`INSERT OR IGNORE INTO team_members (name, role, department, bio, contacts) VALUES 
+    // Добавляем примеры участников команды, если их нет
+    const teamCheck = await pool.query('SELECT id FROM team_members WHERE name = $1', ['xMeT1oRx']);
+    if (teamCheck.rows.length === 0) {
+      await pool.query(`
+        INSERT INTO team_members (name, role, department, bio, contacts) VALUES 
         ('xMeT1oRx', 'Руководитель', '1 отдел', 'Основатель студии, актер озвучки', '{"telegram": "@xmet1orx", "vk": "xmet1orx", "youtube": "xmet1orx"}'),
-        ('Голосова', 'Актер озвучки', '1 отдел', 'Опытный актер озвучки', '{"telegram": "@voiceactor", "vk": "voiceactor", "youtube": "voiceactor"}')`);
-    });
-  });
+        ('Голосова', 'Актер озвучки', '1 отдел', 'Опытный актер озвучки', '{"telegram": "@voiceactor", "vk": "voiceactor", "youtube": "voiceactor"}')
+      `);
+    }
+
+    console.log('Database initialized');
+  } catch (error) {
+    console.error('Database initialization failed:', error);
+    throw error;
+  }
 };
 
 module.exports = {
-  db,
+  pool,
   init
 };
