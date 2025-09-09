@@ -1,56 +1,61 @@
 const express = require('express');
-const { db } = require('../database');
+const { pool } = require('../database');
 
 const router = express.Router();
 
-// Get episodes for anime
-router.get('/:animeId', (req, res) => {
-  const { animeId } = req.params;
-  
-  db.all('SELECT * FROM episodes WHERE anime_id = ? ORDER BY episode_number', [animeId], (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: 'Database error' });
-    }
+// Получить эпизоды для аниме
+router.get('/:animeId', async (req, res) => {
+  try {
+    const { animeId } = req.params;
     
-    res.json(rows);
-  });
+    const result = await pool.query(
+      'SELECT * FROM episodes WHERE anime_id = $1 ORDER BY episode_number',
+      [animeId]
+    );
+    
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching episodes:', error);
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
-// Add new episode
-router.post('/', (req, res) => {
-  const { anime_id, episode_number, title, video_url } = req.body;
-  
-  db.run(
-    'INSERT INTO episodes (anime_id, episode_number, title, video_url) VALUES (?, ?, ?, ?)',
-    [anime_id, episode_number, title, video_url],
-    function(err) {
-      if (err) {
-        return res.status(500).json({ error: 'Failed to add episode' });
-      }
-      
-      res.json({ 
-        message: 'Episode added successfully', 
-        id: this.lastID 
-      });
-    }
-  );
+// Добавить новый эпизод
+router.post('/', async (req, res) => {
+  try {
+    const { anime_id, episode_number, title, video_url } = req.body;
+    
+    const result = await pool.query(
+      'INSERT INTO episodes (anime_id, episode_number, title, video_url) VALUES ($1, $2, $3, $4) RETURNING id',
+      [anime_id, episode_number, title, video_url]
+    );
+    
+    res.json({ 
+      message: 'Episode added successfully', 
+      id: result.rows[0].id 
+    });
+  } catch (error) {
+    console.error('Error adding episode:', error);
+    res.status(500).json({ error: 'Failed to add episode' });
+  }
 });
 
-// Delete episode
-router.delete('/:id', (req, res) => {
-  const { id } = req.params;
-  
-  db.run('DELETE FROM episodes WHERE id = ?', [id], function(err) {
-    if (err) {
-      return res.status(500).json({ error: 'Failed to delete episode' });
-    }
+// Удалить эпизод
+router.delete('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
     
-    if (this.changes === 0) {
+    const result = await pool.query('DELETE FROM episodes WHERE id = $1', [id]);
+    
+    if (result.rowCount === 0) {
       return res.status(404).json({ error: 'Episode not found' });
     }
     
     res.json({ message: 'Episode deleted successfully' });
-  });
+  } catch (error) {
+    console.error('Error deleting episode:', error);
+    res.status(500).json({ error: 'Failed to delete episode' });
+  }
 });
 
 module.exports = router;
